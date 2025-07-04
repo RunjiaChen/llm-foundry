@@ -20,6 +20,8 @@ from llmfoundry.layers_registry import (
 from llmfoundry.models.layers.layer_builders import build_fc, build_norm
 from llmfoundry.models.utils.config_defaults import fc_type_defaults
 
+
+
 __all__ = [
     'scaled_multihead_dot_product_attention',
     'flash_attn_fn',
@@ -1046,7 +1048,7 @@ def attn_bias_shape(
     causal: bool,
     use_sequence_id: bool,
 ) -> Optional[tuple[int, int, int, int]]:
-    if attn_impl == 'flash':
+    if attn_impl == 'flash' or attn_impl == 'nsa':
         return None
     elif attn_impl == 'torch':
         if alibi:
@@ -1135,6 +1137,154 @@ def build_alibi_bias(
     slopes = gen_slopes(n_heads, alibi_bias_max, device=device)
     alibi_bias = alibi_bias * slopes
     return alibi_bias.to(dtype=dtype)
+
+from . import native_sparse_attention
+@attention_classes.register_class('native_sparse_attention')
+class NativeSparseAttention(GroupedQueryAttention):
+    """
+    Drop-in replacement for GroupedQueryAttention that uses Native Sparse
+    Attention (NSA) for the dot-product step.
+
+    Only the attend kernel is swapped; the projection layers, rotary/rope,
+    dropout, residual connections, etc. are still provided by the parent class.
+    """
+
+    def __init__(
+        # ----- names expected by LLM-Foundry’s factory -------------------------
+        self,
+        d_model: int,
+        n_heads: int,
+        kv_heads: int = 1,
+        head_dim: Optional[int] = None,
+        # ----------------------------------------------------------------------
+        sliding_window_size: Optional[int] = None,
+        # ------------- NSA-specific hyper-parameters --------------------------
+        compress_block_size: int = 32,
+        compress_block_sliding_stride: Optional[int] = None,
+        compress_block_overlap_len: Optional[int] = None,  # legacy alias
+        selection_block_size: Optional[int] = None,
+        num_selected_blocks: Optional[int] = None,
+        num_compressed_mem_kv: Optional[int] = None,
+        causal: bool = True,
+        norm: str = "softmax",
+        use_diff_topk: bool = False,
+        use_triton_kernel: bool = True,
+        query_heads_share_selected_kv: bool = True,
+        compress_mlp: Optional[nn.Module] = None,
+        compress_mlp_expand_factor: float = 2.0,
+        strategy_combine_mlp: Optional[nn.Module] = None,
+        # ------------- everything else is forwarded to GQA --------------------
+        **gqa_kwargs,
+    ):
+        # ----------------------------------------------------------------------
+        # 1.  Infer per-head dimension if omitted
+        # ----------------------------------------------------------------------
+        if head_dim is None:
+            if d_model % n_heads != 0:
+                raise ValueError(
+                    f"d_model={d_model} must be divisible by n_heads={n_heads}"
+                )
+            head_dim = d_model // n_heads
+
+        # ----------------------------------------------------------------------
+        # 2.  Handle overlap-len alias and provide default stride
+        # ----------------------------------------------------------------------
+        if (
+            compress_block_overlap_len is not None
+            and compress_block_sliding_stride is None
+        ):
+            compress_block_sliding_stride = (
+                compress_block_size - compress_block_overlap_len
+            )
+
+        if compress_block_sliding_stride is None:
+            # “no overlap” default – safest and cheapest
+            compress_block_sliding_stride = compress_block_size
+
+        # ----------------------------------------------------------------------
+        # 3.  Guarantee a positive num_compressed_mem_kv
+        # ----------------------------------------------------------------------
+        if num_compressed_mem_kv is None:
+            num_compressed_mem_kv = 1
+
+        # ----------------------------------------------------------------------
+        # 4.  Ensure GQA does not route to Flash/Triton
+        # ----------------------------------------------------------------------
+        gqa_kwargs.setdefault("attn_impl", "torch")  # forces parent to call _attend
+
+        # ----------------------------------------------------------------------
+        # 5.  Initialise the parent class (projections, rope, etc.)
+        # ----------------------------------------------------------------------
+        super().__init__(
+            d_model=d_model,
+            n_heads=n_heads,
+            kv_n_heads=kv_heads,
+            head_dim=head_dim,
+            sliding_window_size=sliding_window_size,
+            **gqa_kwargs,
+        )
+
+        # ----------------------------------------------------------------------
+        # 6.  Sanitise MLP arguments (ignore legacy bool/str)
+        # ----------------------------------------------------------------------
+        if compress_mlp is False:  # type: ignore[comparison-overlap]
+            compress_mlp = None
+        if isinstance(strategy_combine_mlp, str):
+            strategy_combine_mlp = None
+
+        # ----------------------------------------------------------------------
+        # 7.  Instantiate the NSA kernel
+        # ----------------------------------------------------------------------
+        self.nsa_core = native_sparse_attention.SparseAttention(
+            dim=d_model,
+            heads=n_heads,
+            kv_heads=kv_heads,
+            dim_head=head_dim,
+            sliding_window_size=sliding_window_size,
+            compress_block_size=compress_block_size,
+            compress_block_sliding_stride=compress_block_sliding_stride,
+            selection_block_size=selection_block_size,
+            num_selected_blocks=num_selected_blocks,
+            num_compressed_mem_kv=num_compressed_mem_kv,
+            causal=causal,
+            norm=norm,
+            use_diff_topk=use_diff_topk,
+            use_triton_kernel=use_triton_kernel,
+            query_heads_share_selected_kv=query_heads_share_selected_kv,
+            compress_mlp=compress_mlp,
+            compress_mlp_expand_factor=compress_mlp_expand_factor,
+            strategy_combine_mlp=strategy_combine_mlp,
+        )
+
+    # --------------------------------------------------------------------------
+    # 8.  Override the low-level attention call
+    # --------------------------------------------------------------------------
+    @torch.no_grad()  # remove if you need gradients of attention weights
+    def _attend(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        *,
+        attention_bias: Optional[torch.Tensor] = None,
+        key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, None]:
+        """
+        Delegates the scaled-dot-product step to SparseAttention.
+
+        Returns:
+            output (b, s, d_model), attention_weights=None
+        """
+        out = self.nsa_core(
+            q,
+            k,
+            v,
+            attention_bias=attention_bias,
+            key_padding_mask=key_padding_mask,
+        )
+        # NSA does not return per-head weights; keep interface consistent
+        return out, None
+
 
 
 attention_implementations.register('flash', func=flash_attn_fn)

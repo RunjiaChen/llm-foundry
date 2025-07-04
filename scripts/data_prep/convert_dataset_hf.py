@@ -6,6 +6,7 @@ from argparse import ArgumentParser, Namespace
 from llmfoundry.command_utils import convert_dataset_hf_from_args
 
 
+
 def parse_args() -> Namespace:
     """Parse commandline arguments."""
     parser = ArgumentParser(
@@ -41,6 +42,15 @@ def parse_args() -> Namespace:
     parser.add_argument('--no_wrap', default=False, action='store_true')
     parser.add_argument('--num_workers', type=int, required=False, default=None)
 
+    parser.add_argument(
+    "--local_json_path",
+    type=str,
+    default=None,
+    help=("Directory that holds raw *.json.gz shards. "
+          "If set, the converter loads the data with "
+          "datasets.load_dataset('json', …) instead of pulling from the Hub."),
+    )
+
     parsed = parser.parse_args()
     return parsed
 
@@ -60,4 +70,5 @@ if __name__ == '__main__':
         eos_text=args.eos_text,
         no_wrap=args.no_wrap,
         num_workers=args.num_workers,
+        local_json_path=args.local_json_path,
     )

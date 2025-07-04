@@ -21,6 +21,26 @@ from llmfoundry.data import ConcatTokensDataset, NoConcatDataset
 from llmfoundry.utils.builders import build_tokenizer
 
 
+# ────────────────────────────────────────────────
+# Silence retry chatter before HuggingFace Hub is imported anywhere else
+import logging
+from datasets.utils import logging as ds_logging
+
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
+ds_logging.set_verbosity_error()          # hide datasets-side info/progress
+#
+# Build a DownloadConfig that (a) gives each chunk more time to finish, and
+# (b) overwrites any shard that was truncated earlier.
+from datasets import DownloadConfig
+
+DL_CFG = DownloadConfig(
+    resume_download=True,   # will pick up where an earlier run stopped
+    force_download=True,    # replace any 0-byte / corrupted files
+    max_retries=10 )        # was 5
+
+import glob 
+
 class ConcatMode(Enum):
     NO_CONCAT = 'NO_CONCAT'
     CONCAT_TOKENS = 'CONCAT_TOKENS'
@@ -170,7 +190,9 @@ def build_hf_dataset(
     no_wrap: bool = False,
     tokenizer: Optional[PreTrainedTokenizerBase] = None,
     data_subset: Union[str, None] = None,
+    local_json_path: Optional[str] = None,
 ) -> IterableDataset:
+    
     """Build an IterableDataset over the HF C4 or pile source data.
 
     Args:
@@ -188,12 +210,33 @@ def build_hf_dataset(
     Returns:
         An IterableDataset.
     """
-    hf_dataset = hf_datasets.load_dataset(
-        path=dataset_name,
-        name=data_subset,
-        split=split,
-        streaming=True,
-    )
+    
+    print("invoked build_hf_dataset3")
+
+    print("this is here") 
+    print(local_json_path)
+    if local_json_path is not None:
+        print("this is done")
+        pattern = os.path.join(local_json_path, f"c4-{split}*.json.gz")
+        files = sorted(glob.glob(pattern))
+        if not files:
+            raise FileNotFoundError(f"No shards matched {pattern}")
+        hf_dataset = hf_datasets.load_dataset(
+            "json",
+            data_files={split: files},
+            split=split,
+            streaming=True,
+        )
+    else:
+        hf_dataset = hf_datasets.load_dataset(
+            path=dataset_name,
+            name=data_subset,
+            split=split,
+            streaming=True,
+            download_config=DL_CFG,
+        )
+
+
     if mode == ConcatMode.NO_CONCAT:
         dataset = NoConcatDataset(hf_dataset)
     else:
@@ -312,6 +355,7 @@ def convert_dataset_hf(
     eos_text: str,
     no_wrap: bool,
     num_workers: Optional[int],
+    local_json_path: Optional[str] = None,
 ) -> None:
     """Converts HuggingFace datasets to MDS format.
 
@@ -364,6 +408,7 @@ def convert_dataset_hf(
             continue
 
         # Get samples
+        
         hf_dataset = build_hf_dataset(
             dataset_name=dataset,
             data_subset=data_subset,
@@ -374,6 +419,7 @@ def convert_dataset_hf(
             eos_text=eos_text,
             no_wrap=no_wrap,
             tokenizer=built_tokenizer,
+            local_json_path=local_json_path
         )
         loader = build_dataloader(
             dataset=hf_dataset,
@@ -431,6 +477,7 @@ def convert_dataset_hf_from_args(
     eos_text: Optional[str],
     no_wrap: bool,
     num_workers: Optional[int],
+    local_json_path: Optional[str] = None,
 ) -> None:
     """A wrapper for `convert_dataset_hf` that parses arguments.
 
@@ -488,4 +535,5 @@ def convert_dataset_hf_from_args(
         eos_text=eos_text if eos_text else '',
         no_wrap=no_wrap,
         num_workers=num_workers,
+        local_json_path=local_json_path,
     )

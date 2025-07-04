@@ -439,6 +439,28 @@ def multihead_attention_init(
 
     return False
 
+@summon_dtensor
+@module_init_fns.register("sparse_attention")
+def sparse_attention_init(
+    module: nn.Module,
+    init_fn_: Callable,
+    d_model: Optional[int],
+    init_div_is_residual: Union[int, float, str, bool],
+    div_is_residual: float,
+    **kwargs,
+) -> bool:
+    """
+    Initialiser for native SparseAttention.
+
+    We do *not* touch the module’s own parameters, because every learnable tensor
+    inside SparseAttention is an nn.Linear or nn.Parameter that will already be
+    handled by the 'fc' or default initialisers.  We just need to return True so
+    generic_param_init_fn_ knows the module is covered.
+    """
+    if isinstance(module, SparseAttention):
+        return True          # <- claims the module, nothing more to do
+    return False
+
 
 def te_layernorm_mlp_init(
     module: nn.Module,
@@ -983,6 +1005,52 @@ def xavier_normal_param_init_fn_(
         emb_init_uniform_lim=emb_init_uniform_lim,
     )
 
+from llmfoundry.models.layers.native_sparse_attention import SparseAttention
+@summon_dtensor
+@module_init_fns.register("sparse_attention")
+def sparse_attention_init(
+    module: nn.Module,
+    init_fn_: Callable,
+    d_model: Optional[int],
+    init_div_is_residual: Union[int, float, str, bool],
+    div_is_residual: float,
+    **kwargs,
+) -> bool:
+    """
+    Initialiser for native SparseAttention.
+
+    We do *not* touch the module’s own parameters, because every learnable tensor
+    inside SparseAttention is an nn.Linear or nn.Parameter that will already be
+    handled by the 'fc' or default initialisers.  We just need to return True so
+    generic_param_init_fn_ knows the module is covered.
+    """
+    if isinstance(module, SparseAttention):
+        return True          # <- claims the module, nothing more to do
+    return False
+
+from rotary_embedding_torch import RotaryEmbedding
+@module_init_fns.register("rotary_embedding")
+@summon_dtensor
+def rotary_embedding_init(
+    module: nn.Module,
+    init_fn_: Callable,
+    d_model: Optional[int],
+    init_div_is_residual: Union[int, float, str, bool],
+    div_is_residual: float,
+    **kwargs,
+) -> bool:
+    """
+    RotaryEmbedding already allocates its cosine/sine Parameter tensors with the
+    *final* deterministic values in its own __init__, so we do **not** apply any
+    random weight initialisation here.  We only claim the module so that
+    `generic_param_init_fn_` stops searching.
+    """
+    # local import guarantees we compare against the *same* class object
+
+    if isinstance(module, RotaryEmbedding):
+        return True          # → parameters considered initialised
+    return False
+
 
 param_init_fns.register('default_', func=torch_default_param_init_fn_)
 param_init_fns.register('baseline_', func=baseline_param_init_fn_)
@@ -997,5 +1065,7 @@ module_init_fns.register('fc', func=fc_init)
 module_init_fns.register('embedding', func=embedding_init)
 module_init_fns.register('norm', func=norm_init)
 module_init_fns.register('multihead_attention', func=multihead_attention_init)
+module_init_fns.register('sparse_attention', func=sparse_attention_init)
+module_init_fns.register('rotary_embedding', func=rotary_embedding_init)
 module_init_fns.register('te_layernorm_mlp', func=te_layernorm_mlp_init)
 module_init_fns.register('moe', func=moe_init)

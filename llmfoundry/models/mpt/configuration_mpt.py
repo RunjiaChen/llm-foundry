@@ -305,7 +305,7 @@ class MPTConfig(PretrainedConfig):
             raise ValueError(
                 "self.attn_config['attn_pdrop'], resid_pdrop, emb_pdrop are probabilities and must be between 0 and 1",
             )
-        if self.attn_config['attn_impl'] not in ['torch', 'flash']:
+        if self.attn_config['attn_impl'] not in ['torch', 'flash', 'nsa']:
             raise ValueError(
                 f"Unknown attn_impl={self.attn_config['attn_impl']}",
             )

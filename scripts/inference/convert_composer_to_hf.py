@@ -101,6 +101,8 @@ def write_huggingface_pretrained_from_composer_checkpoint(
     print('Loading checkpoint into CPU RAM...')
     composer_state_dict = safe_torch_load(local_checkpoint_save_location)
 
+
+
     if 'state' not in composer_state_dict:
         raise RuntimeError(
             f'"state" is not an available key in the provided composer checkpoint. Is {local_checkpoint_save_location} ill-formed?',

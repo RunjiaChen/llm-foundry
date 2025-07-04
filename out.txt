@@ -1,0 +1,18 @@
+# ----------------------------------------------
+    attn_type: native_sparse_attention   # ← your wrapper class
+    attn_impl: torch                     # ← lets _attend run NSA
+    # ----------------------------------------------
+
+    rope: true
+    alibi: false
+    clip_qkv: 8
+    rope_theta: 500000
+
+    # NSA hyper-parameters
+    sliding_window_size: 256
+    compress_block_size: 32
+    compress_block_sliding_stride: 32     # or 16 / 8 if you want overlap
+    selection_block_size: 64
+    num_selected_blocks: 4
+    num_compressed_mem_kv: 2
+    use_triton_kernel: true

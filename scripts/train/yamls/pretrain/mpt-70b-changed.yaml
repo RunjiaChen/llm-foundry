@@ -8,7 +8,7 @@ variables:
   run_name:  # If left blank, will be read from env var $RUN_NAME
 
 max_seq_len: ${variables.max_seq_len}
-run_name: mpt-70b-1-layer-nsa
+run_name: mpt-70b-1-layer
 
 # Model
 model:
@@ -21,9 +21,8 @@ model:
   max_seq_len: ${variables.max_seq_len}
   vocab_size: 50368
   attn_config:
-    attn_type: native_sparse_attention
+    attn_type: grouped_query_attention
     kv_n_heads: 4
-    sliding_window_size: 512
 
 # Tokenizer
 tokenizer:
@@ -110,8 +109,8 @@ callbacks:
   memory_monitor: {}
   runtime_estimator: {}
   nsys_callback: 
-    start_batch: 2
-    stop_batch: 4
+    start_batch: 15
+    stop_batch: 20
 
 loggers:
   wandb: {}

@@ -110,8 +110,8 @@ callbacks:
   memory_monitor: {}
   runtime_estimator: {}
   nsys_callback: 
-    start_batch: 2
-    stop_batch: 4
+    start_batch: 15
+    stop_batch: 20
 
 loggers:
   wandb: {}
